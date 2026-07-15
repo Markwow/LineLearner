@@ -1,58 +1,98 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# 🎭 Line Learner
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Rehearse lines with yourself. Paste a script, record the cue character's lines through your device mic, then play them back — one line at a time or the whole scene in order.
 
-## About Laravel
+## How it works
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+1. **Create a script.** On the home page, give it a title and paste the script, one line per row as `Speaker: line`:
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+   ```
+   Mark: hi
+   Ivan: hey
+   Mark: sup
+   Ivan: nothin
+   ```
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+2. **Pick a cue character.** On the rehearse page, choose whose lines you want to record from the **Cue character** dropdown (e.g. `Mark`). Only that character's lines get record/play controls; the other lines show as dimmed context.
 
-## Learning Laravel
+3. **Record & play.** Each cue line has three buttons:
+   - **●** record — tap to start, tap **■** to stop
+   - **▶** play back the recording
+   - **×** delete it
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+   A green dot marks a line that's been recorded.
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+4. **Run the scene.** **▶ Play cue lines in order** plays every recorded cue line back-to-back.
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+Recordings save automatically and persist across reloads and restarts. You can keep multiple scripts, and edit or delete each one from the section at the bottom of its page.
 
-## Agentic Development
+## Requirements
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+- PHP 8.2+
+- Composer
+- SQLite (default) — or MySQL/Postgres if you prefer
+
+## Running locally
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env        # if you don't already have a .env
+php artisan key:generate
+php artisan migrate
+php artisan storage:link     # audio is served through this symlink
+php artisan serve
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Then open **http://127.0.0.1:8000**.
 
-## Contributing
+> **Use `localhost` / `127.0.0.1`, not a `.test` domain over plain HTTP.** The microphone (`getUserMedia`) only works in a *secure context*. `localhost` is exempt in development; anything else needs HTTPS. The first time you record, the browser will ask for mic permission — allow it.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## Project layout
 
-## Code of Conduct
+| Piece | Location |
+| --- | --- |
+| Script model (parses `Speaker: text`, derives speakers) | [`app/Models/Script.php`](app/Models/Script.php) |
+| Recording model | [`app/Models/Recording.php`](app/Models/Recording.php) |
+| Script CRUD | [`app/Http/Controllers/ScriptController.php`](app/Http/Controllers/ScriptController.php) |
+| Audio upload / delete | [`app/Http/Controllers/RecordingController.php`](app/Http/Controllers/RecordingController.php) |
+| Create + list view | [`resources/views/scripts/index.blade.php`](resources/views/scripts/index.blade.php) |
+| Rehearse view (`MediaRecorder` JS) | [`resources/views/scripts/show.blade.php`](resources/views/scripts/show.blade.php) |
+| Routes | [`routes/web.php`](routes/web.php) |
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+Audio is stored on the `public` filesystem disk under `storage/app/public/recordings/{script}/` and tracked in the `recordings` table (SQLite by default).
 
-## Security Vulnerabilities
+## Deploying to production
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Standard Laravel deploy, plus three things that matter **specifically** because this app captures audio to disk:
+
+1. **HTTPS is mandatory.** Without a real TLS certificate the record buttons silently do nothing — the mic never activates outside a secure context. This is the most common thing people miss.
+
+2. **Raise the upload size limits.** Recordings upload as files. PHP and your web server default well below the app's 50 MB cap (`max:51200` in [`RecordingController.php`](app/Http/Controllers/RecordingController.php)), so longer takes fail silently. Keep all three in sync:
+
+   ```ini
+   ; php.ini
+   upload_max_filesize = 50M
+   post_max_size       = 51M
+   ```
+   ```nginx
+   # nginx
+   client_max_body_size 51M;
+   ```
+
+3. **Audio must live on persistent storage.**
+   - Run `php artisan storage:link` on the server.
+   - On a single VPS, local disk is fine — just make `storage/` writable by the web user.
+   - On **ephemeral or multi-server hosts** (Heroku, some Docker setups, etc.) local files get wiped on redeploy or aren't shared between instances. Move recordings to **S3**: configure an `s3` disk and switch the `Storage::disk('public')` calls plus [`Recording::url()`](app/Models/Recording.php) to use it. The same caveat applies to the SQLite database file — put it on persistent storage or use a managed MySQL/Postgres instance.
+
+### Standard production checklist
+
+- `.env`: `APP_ENV=production`, `APP_DEBUG=false`, a generated `APP_KEY`, correct `APP_URL`
+- `composer install --no-dev --optimize-autoloader`
+- `php artisan migrate --force`
+- `php artisan config:cache route:cache view:cache`
+- `php artisan storage:link`
+- Point `DB_CONNECTION` at a managed database for anything beyond a single-server setup
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+MIT.
