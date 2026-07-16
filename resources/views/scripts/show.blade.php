@@ -25,6 +25,7 @@
     .icon-btn.rec { background: var(--record); }
     .icon-btn.rec.recording { animation: pulse 1s infinite; }
     .icon-btn.play { background: var(--accent-2); }
+    .icon-btn.play.playing { background: var(--record); }
     .icon-btn.play:disabled { background: var(--panel-2); }
     .icon-btn.del { background: transparent; color: var(--muted); font-size: 18px; }
     @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.5); } }
@@ -106,9 +107,13 @@
         const urls = @json($recordingUrls);
 
         let mediaRecorder = null;
+        let mediaStream = null;
         let currentRow = null;
+        let currentRecBtn = null;
+        let isRecording = false;
         let chunks = [];
         let currentAudio = null;
+        let currentPlayBtn = null;
 
         function applyCueFilter() {
             const cue = cueSelect.value;
@@ -124,45 +129,111 @@
 
         function urlFor(tpl, idx) { return tpl.replace('__IDX__', idx); }
 
+        // Release the mic no matter what state the recorder is in. iOS holds the
+        // mic open (the orange dot / "recording" state) until every track is stopped,
+        // so this must be callable independently of the recorder's own events.
+        function releaseMic() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(t => t.stop());
+                mediaStream = null;
+            }
+        }
+
+        function resetRecBtn(recBtn) {
+            if (!recBtn) return;
+            recBtn.classList.remove('recording');
+            recBtn.textContent = '●';
+        }
+
+        // Safari/iOS produces audio/mp4, Chrome/Firefox produce webm. Pick the first
+        // type the browser actually supports so MediaRecorder never throws on iOS.
+        function pickMimeType() {
+            const candidates = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mpeg'];
+            if (window.MediaRecorder && MediaRecorder.isTypeSupported) {
+                for (const t of candidates) {
+                    if (MediaRecorder.isTypeSupported(t)) return t;
+                }
+            }
+            return '';
+        }
+
+        function extFor(mime) {
+            if (mime.includes('mp4')) return 'm4a';
+            if (mime.includes('mpeg')) return 'mp3';
+            if (mime.includes('ogg')) return 'ogg';
+            return 'webm';
+        }
+
         async function startRecording(row, recBtn) {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
                 micHint.textContent = 'This browser does not support microphone recording.';
                 return;
             }
-            let stream;
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             } catch (e) {
+                mediaStream = null;
                 micHint.textContent = 'Microphone permission denied. Allow mic access and try again.';
                 return;
             }
+
             chunks = [];
-            mediaRecorder = new MediaRecorder(stream);
+            const mime = pickMimeType();
+            try {
+                mediaRecorder = mime
+                    ? new MediaRecorder(mediaStream, { mimeType: mime })
+                    : new MediaRecorder(mediaStream);
+            } catch (e) {
+                // Constructing the recorder failed — release the mic so it isn't stuck on.
+                releaseMic();
+                micHint.textContent = 'Could not start recording on this browser.';
+                return;
+            }
+
             currentRow = row;
-            mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+            currentRecBtn = recBtn;
+            isRecording = true;
+            micHint.textContent = 'Recording… tap ■ to stop.';
+
+            mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
             mediaRecorder.onstop = async () => {
-                stream.getTracks().forEach(t => t.stop());
-                const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+                releaseMic();
+                resetRecBtn(recBtn);
+                if (!chunks.length) {
+                    micHint.textContent = 'That recording came out empty — try again.';
+                    return;
+                }
+                const type = (mediaRecorder && mediaRecorder.mimeType) || mime || 'audio/mp4';
+                const blob = new Blob(chunks, { type });
                 await uploadBlob(row, blob);
-                recBtn.classList.remove('recording');
-                recBtn.textContent = '●';
             };
-            mediaRecorder.start();
+            mediaRecorder.onerror = () => { releaseMic(); resetRecBtn(recBtn); isRecording = false; };
+
+            // Timeslice makes Safari flush data during recording instead of only at
+            // stop(), which is far more reliable on iOS and avoids empty recordings.
+            mediaRecorder.start(1000);
             recBtn.classList.add('recording');
             recBtn.textContent = '■';
         }
 
         function stopRecording(recBtn) {
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
-            }
+            isRecording = false;
+            currentRecBtn = null;
+            // Reset the UI immediately so the button never looks stuck.
+            resetRecBtn(recBtn);
+            try {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+            } catch (e) { /* ignore */ }
+            // Safety net: if onstop never fires (a known iOS quirk), force the mic off.
+            setTimeout(releaseMic, 1500);
         }
 
         async function uploadBlob(row, blob) {
             const idx = row.dataset.index;
             const form = new FormData();
-            const ext = (blob.type.includes('ogg')) ? 'ogg' : 'webm';
-            form.append('audio', blob, `line-${idx}.${ext}`);
+            form.append('audio', blob, `line-${idx}.${extFor(blob.type)}`);
             const res = await fetch(urlFor(storeTpl, idx), {
                 method: 'POST',
                 headers: { 'X-CSRF-TOKEN': CSRF, 'Accept': 'application/json' },
@@ -183,12 +254,35 @@
             row.querySelector('.del').style.display = '';
         }
 
+        function stopCurrentAudio() {
+            if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+            if (currentPlayBtn) {
+                currentPlayBtn.textContent = '▶';
+                currentPlayBtn.classList.remove('playing');
+                currentPlayBtn = null;
+            }
+        }
+
         function playRow(row) {
             const idx = row.dataset.index;
             if (!urls[idx]) return null;
-            if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+            stopCurrentAudio();
+            const playBtn = row.querySelector('.play');
             const audio = new Audio(urls[idx]);
             currentAudio = audio;
+            currentPlayBtn = playBtn;
+            playBtn.textContent = '■';
+            playBtn.classList.add('playing');
+            const reset = () => {
+                if (currentPlayBtn === playBtn) {
+                    playBtn.textContent = '▶';
+                    playBtn.classList.remove('playing');
+                    currentPlayBtn = null;
+                    currentAudio = null;
+                }
+            };
+            audio.addEventListener('ended', reset);
+            audio.addEventListener('error', reset);
             audio.play();
             return audio;
         }
@@ -209,15 +303,20 @@
             const row = e.target.closest('.line');
             if (!row) return;
             if (e.target.classList.contains('rec')) {
-                if (mediaRecorder && mediaRecorder.state === 'recording' && currentRow === row) {
+                if (isRecording && currentRecBtn === e.target) {
                     stopRecording(e.target);
-                } else if (mediaRecorder && mediaRecorder.state === 'recording') {
+                } else if (isRecording) {
                     // ignore while another row is recording
                 } else {
                     startRecording(row, e.target);
                 }
             } else if (e.target.classList.contains('play')) {
-                playRow(row);
+                // Toggle: tapping the button that's currently playing stops it.
+                if (currentPlayBtn === e.target) {
+                    stopCurrentAudio();
+                } else {
+                    playRow(row);
+                }
             } else if (e.target.classList.contains('del')) {
                 if (confirm('Delete this recording?')) deleteRow(row);
             }
@@ -227,7 +326,7 @@
         const playAllBtn = document.getElementById('playAllBtn');
         let sequencePlaying = false;
         playAllBtn.addEventListener('click', async () => {
-            if (sequencePlaying) { if (currentAudio) currentAudio.pause(); sequencePlaying = false; playAllBtn.textContent = '▶ Play cue lines in order'; return; }
+            if (sequencePlaying) { stopCurrentAudio(); sequencePlaying = false; playAllBtn.textContent = '▶ Play cue lines in order'; return; }
             sequencePlaying = true;
             playAllBtn.textContent = '■ Stop';
             const rows = [...document.querySelectorAll('.line.cue')];
@@ -237,8 +336,8 @@
                 await new Promise(resolve => {
                     const audio = playRow(row);
                     if (!audio) return resolve();
-                    audio.onended = resolve;
-                    audio.onerror = resolve;
+                    audio.addEventListener('ended', resolve);
+                    audio.addEventListener('error', resolve);
                 });
             }
             sequencePlaying = false;

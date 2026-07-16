@@ -11,7 +11,7 @@ class RecordingController extends Controller
     public function store(Request $request, Script $script, int $lineIndex)
     {
         $request->validate([
-            'audio' => ['required', 'file', 'mimetypes:audio/webm,audio/ogg,audio/mp4,audio/mpeg,video/webm', 'max:51200'],
+            'audio' => ['required', 'file', 'mimetypes:audio/webm,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,audio/mpeg,video/webm,video/mp4', 'max:51200'],
         ]);
 
         // Replace any existing recording for this line.
