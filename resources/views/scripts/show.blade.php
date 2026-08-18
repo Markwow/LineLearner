@@ -32,6 +32,48 @@
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex-shrink:0; }
     .status-dot.has { background: var(--good); }
     .hint { font-size: 13px; color: var(--muted); }
+
+    /* Currently-playing line during rehearsal */
+    .line.now-playing {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px var(--accent), 0 6px 22px rgba(108,140,255,.25);
+    }
+
+    /* Sticky rehearsal control bar */
+    .rehearsal-bar {
+        position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+        background: rgba(15,17,21,.86); backdrop-filter: blur(10px);
+        border-top: 1px solid var(--border);
+        padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    }
+    .rb-inner { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+    .rb-nextup { display: flex; align-items: baseline; gap: 8px; min-height: 20px; }
+    .rb-label {
+        font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+        color: var(--muted); flex-shrink: 0;
+    }
+    .rb-next-text { font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rb-controls { display: flex; gap: 8px; }
+    .rb-btn {
+        height: 52px; border-radius: 12px; font-size: 16px; font-weight: 650;
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    }
+    .rb-btn.wide { flex: 1; }
+    .rb-btn.fixed { width: 60px; flex-shrink: 0; }
+    .rb-btn.primary { background: var(--accent-2); border-color: transparent; color: #fff; }
+    .rb-btn.playpause.active { background: var(--good); border-color: transparent; color: #06231a; }
+    .rb-kbd { font-size: 12px; color: var(--muted); text-align: center; }
+    .rb-kbd kbd {
+        background: var(--panel-2); border: 1px solid var(--border); border-bottom-width: 2px;
+        border-radius: 6px; padding: 1px 6px; font-family: inherit; font-size: 11px; color: var(--text);
+    }
+    @media (min-width: 560px) {
+        .rb-inner { flex-direction: row; align-items: center; }
+        .rb-nextup { flex: 1; min-width: 0; }
+        .rb-controls { flex-shrink: 0; }
+        .rb-kbd { display: none; }
+    }
 </style>
 @endpush
 
@@ -51,8 +93,6 @@
                 @endforeach
             </select>
         </div>
-        <div class="grow"></div>
-        <button id="playAllBtn" class="btn-ghost">▶ Play cue lines in order</button>
     </div>
 
     <p class="hint" id="micHint">Hit the red button on a cue line to record it. Recordings save automatically.</p>
@@ -95,6 +135,24 @@
         </form>
     </details>
 
+    {{-- Spacer so the fixed rehearsal bar never hides the last lines --}}
+    <div style="height: 150px"></div>
+
+    <div class="rehearsal-bar" id="rehearsalBar">
+        <div class="rb-inner">
+            <div class="rb-nextup">
+                <span class="rb-label">Next&nbsp;up</span>
+                <span class="rb-next-text" id="rbNextText">—</span>
+            </div>
+            <div class="rb-controls">
+                <button id="rbRestart" class="rb-btn fixed" title="Restart from first line (R)">⏮</button>
+                <button id="rbPlay" class="rb-btn fixed playpause" title="Play / Pause (Space)">▶</button>
+                <button id="rbNext" class="rb-btn wide primary" title="Play next cue line (→)">Next cue ⏭</button>
+            </div>
+            <div class="rb-kbd"><kbd>Space</kbd> play/pause · <kbd>→</kbd> next cue</div>
+        </div>
+    </div>
+
     <script>
         const CSRF = document.querySelector('meta[name=csrf-token]').content;
         const linesEl = document.getElementById('lines');
@@ -124,7 +182,8 @@
                 row.classList.toggle('context', !isCue);
             });
         }
-        cueSelect.addEventListener('change', applyCueFilter);
+        // Changing the cue character rebuilds the queue, so reset the rehearsal cursor.
+        cueSelect.addEventListener('change', () => { applyCueFilter(); restartRehearsal(); });
         applyCueFilter();
 
         function urlFor(tpl, idx) { return tpl.replace('__IDX__', idx); }
@@ -252,6 +311,7 @@
             row.querySelector('.status-dot').classList.add('has');
             row.querySelector('.play').disabled = false;
             row.querySelector('.del').style.display = '';
+            updateNextUp();
         }
 
         function stopCurrentAudio() {
@@ -297,6 +357,8 @@
             row.querySelector('.status-dot').classList.remove('has');
             row.querySelector('.play').disabled = true;
             row.querySelector('.del').style.display = 'none';
+            if (row === currentCueRow) { currentCueRow = null; row.classList.remove('now-playing'); }
+            updateNextUp();
         }
 
         linesEl.addEventListener('click', e => {
@@ -316,32 +378,130 @@
                     stopCurrentAudio();
                 } else {
                     playRow(row);
+                    // Tapping a cue line directly moves the rehearsal cursor here,
+                    // so "Next" continues from this point.
+                    if (row.classList.contains('cue')) {
+                        currentCueRow = row;
+                        highlightCue(row);
+                        updateNextUp();
+                    }
                 }
             } else if (e.target.classList.contains('del')) {
                 if (confirm('Delete this recording?')) deleteRow(row);
             }
         });
 
-        // Play all cue lines in order, waiting for each to finish.
-        const playAllBtn = document.getElementById('playAllBtn');
-        let sequencePlaying = false;
-        playAllBtn.addEventListener('click', async () => {
-            if (sequencePlaying) { stopCurrentAudio(); sequencePlaying = false; playAllBtn.textContent = '▶ Play cue lines in order'; return; }
-            sequencePlaying = true;
-            playAllBtn.textContent = '■ Stop';
-            const rows = [...document.querySelectorAll('.line.cue')];
-            for (const row of rows) {
-                if (!sequencePlaying) break;
-                if (!urls[row.dataset.index]) continue;
-                await new Promise(resolve => {
-                    const audio = playRow(row);
-                    if (!audio) return resolve();
-                    audio.addEventListener('ended', resolve);
-                    audio.addEventListener('error', resolve);
+        // ---- Rehearsal engine: step through the cue queue hands-free ----
+        const rbPlay = document.getElementById('rbPlay');
+        const rbNext = document.getElementById('rbNext');
+        const rbRestart = document.getElementById('rbRestart');
+        const rbNextText = document.getElementById('rbNextText');
+        let currentCueRow = null;   // last cue line played
+        let autoAdvance = false;    // true while auto-playing straight through the queue
+
+        // The queue is every cue line that actually has a recording, in order.
+        function buildQueue() {
+            return [...document.querySelectorAll('.line.cue')].filter(r => urls[r.dataset.index]);
+        }
+
+        function nextCueRow() {
+            const q = buildQueue();
+            if (!q.length) return null;
+            if (!currentCueRow) return q[0];
+            const i = q.indexOf(currentCueRow);
+            if (i === -1) return q[0];
+            return q[i + 1] || null; // null once we're past the last line
+        }
+
+        function highlightCue(row) {
+            document.querySelectorAll('.line.now-playing').forEach(r => r.classList.remove('now-playing'));
+            if (row) row.classList.add('now-playing');
+        }
+
+        function setPlayIcon(playing) {
+            rbPlay.textContent = playing ? '⏸' : '▶';
+            rbPlay.classList.toggle('active', playing);
+        }
+
+        function updateNextUp() {
+            const row = nextCueRow();
+            if (!row) {
+                rbNextText.textContent = buildQueue().length
+                    ? 'End of scene — press ▶ or Next to start over'
+                    : 'No recorded cue lines yet';
+                return;
+            }
+            const sp = row.dataset.speaker || '';
+            const txt = row.querySelector('.text').textContent.trim();
+            rbNextText.textContent = (sp ? sp + ' — ' : '') + '“' + txt + '”';
+        }
+
+        // Play one cue line, scrolling it into view. If `auto`, chain to the next when it ends.
+        function playCue(row, auto) {
+            currentCueRow = row;
+            highlightCue(row);
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const audio = playRow(row);
+            setPlayIcon(!!audio);
+            if (audio) {
+                audio.addEventListener('ended', () => {
+                    if (autoAdvance) advance(true);
+                    else setPlayIcon(false);
                 });
             }
-            sequencePlaying = false;
-            playAllBtn.textContent = '▶ Play cue lines in order';
+            updateNextUp();
+        }
+
+        // Advance to and play the next cue line. Returns false at the end of the queue.
+        function advance(auto) {
+            const row = nextCueRow();
+            if (!row) {
+                currentCueRow = null;   // reset so the next press starts from the top
+                autoAdvance = false;
+                highlightCue(null);
+                setPlayIcon(false);
+                updateNextUp();
+                return false;
+            }
+            playCue(row, auto);
+            return true;
+        }
+
+        function togglePlayPause() {
+            if (currentAudio && !currentAudio.paused && !currentAudio.ended) {
+                currentAudio.pause();          // playing -> pause
+                setPlayIcon(false);
+            } else if (currentAudio && currentAudio.paused) {
+                currentAudio.play();           // paused -> resume
+                setPlayIcon(true);
+            } else {
+                autoAdvance = true;            // idle -> start auto-playing the queue
+                advance(true);
+            }
+        }
+
+        function restartRehearsal() {
+            stopCurrentAudio();
+            autoAdvance = false;
+            currentCueRow = null;
+            highlightCue(null);
+            setPlayIcon(false);
+            updateNextUp();
+        }
+
+        rbPlay.addEventListener('click', togglePlayPause);
+        rbNext.addEventListener('click', () => advance(autoAdvance));
+        rbRestart.addEventListener('click', restartRehearsal);
+
+        // Keyboard: Space = play/pause, → = next cue, R = restart.
+        document.addEventListener('keydown', e => {
+            const t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+            if (e.code === 'Space') { e.preventDefault(); togglePlayPause(); }
+            else if (e.code === 'ArrowRight') { e.preventDefault(); advance(autoAdvance); }
+            else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); restartRehearsal(); }
         });
+
+        updateNextUp();
     </script>
 @endsection
