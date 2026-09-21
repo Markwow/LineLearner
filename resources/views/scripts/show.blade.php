@@ -79,7 +79,12 @@
 
 @section('content')
     <div class="row-flex" style="justify-content:space-between; margin-bottom:14px;">
-        <h2 style="margin:0">{{ $script->title }}</h2>
+        <div>
+            <h2 style="margin:0">{{ $script->title }}</h2>
+            @if($script->user_id !== auth()->id())
+                <span class="pill">owner: {{ $script->owner?->name ?? 'nobody' }}</span>
+            @endif
+        </div>
         <a href="{{ route('scripts.index') }}" class="muted">← all scripts</a>
     </div>
 
@@ -87,9 +92,9 @@
         <div>
             <label style="margin-bottom:2px">Cue character (whose lines you record)</label>
             <select id="cueSelect">
-                <option value="__all__">Every line</option>
+                <option value="__all__" selected>All characters</option>
                 @foreach($speakers as $speaker)
-                    <option value="{{ $speaker }}" @if($loop->first) selected @endif>{{ $speaker }}</option>
+                    <option value="{{ $speaker }}">{{ $speaker }}</option>
                 @endforeach
             </select>
         </div>

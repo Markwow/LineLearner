@@ -83,6 +83,51 @@
             background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
             border-radius: 10px; padding: 8px 10px; font-size: 14px; font-family: inherit;
         }
+        nav.user-nav { display: flex; gap: 14px; align-items: center; font-size: 13px; flex-wrap: wrap; justify-content: flex-end; }
+        nav.user-nav .who { color: var(--muted); }
+        nav.user-nav form { margin: 0; }
+        nav.user-nav button.linkish {
+            background: none; border: none; color: var(--accent); padding: 0;
+            font-size: 13px; font-weight: 500; cursor: pointer;
+        }
+        nav.user-nav button.linkish:hover { text-decoration: underline; }
+        .flash {
+            background: rgba(63,207,142,.12); border: 1px solid rgba(63,207,142,.4);
+            color: var(--good); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px;
+        }
+        .errors {
+            background: rgba(255,84,104,.1); border: 1px solid rgba(255,84,104,.4);
+            color: var(--record); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px;
+        }
+        .errors ul { margin: 0; padding-left: 18px; }
+        table.data { width: 100%; border-collapse: collapse; font-size: 14px; }
+        table.data th {
+            text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+            color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border);
+        }
+        table.data td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        table.data tr:last-child td { border-bottom: none; }
+        .tag {
+            display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+            padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+        }
+        .tag.good { color: var(--good); border-color: rgba(63,207,142,.4); }
+        .tag.warn { color: #e6b455; border-color: rgba(230,180,85,.4); }
+        .tag.dim { opacity: .7; }
+        .code-pill {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px;
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px;
+        }
+        input[type=email], input[type=password], input[type=number] {
+            width: 100%; background: var(--panel-2); border: 1px solid var(--border);
+            border-radius: 10px; color: var(--text); padding: 10px 12px; font-size: 15px;
+            font-family: inherit; margin-bottom: 14px;
+        }
+        .auth-wrap { max-width: 400px; margin: 60px auto 0; }
+        .checkline { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 14px; color: var(--text); }
+        .checkline input { margin: 0; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+        @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
     </style>
     @stack('head')
 </head>
@@ -93,7 +138,36 @@
                 <h1><a href="{{ route('scripts.index') }}" style="color:var(--text)">🎭 Line Learner</a></h1>
                 <div class="sub">Record the cue lines, play them back, rehearse.</div>
             </div>
+            @auth
+                <nav class="user-nav">
+                    <span class="who">{{ auth()->user()->name }}</span>
+                    @if(auth()->user()->isAdmin())
+                        <a href="{{ route('admin.users.index') }}">Users</a>
+                        <a href="{{ route('admin.scripts.index') }}">All scripts</a>
+                        <a href="{{ route('admin.invites.index') }}">Invites</a>
+                    @endif
+                    <form method="POST" action="{{ route('logout') }}">
+                        @csrf
+                        <button type="submit" class="linkish">Log out</button>
+                    </form>
+                </nav>
+            @endauth
         </header>
+
+        @if(session('status'))
+            <div class="flash">{{ session('status') }}</div>
+        @endif
+
+        @if($errors->any())
+            <div class="errors">
+                <ul>
+                    @foreach($errors->all() as $error)
+                        <li>{{ $error }}</li>
+                    @endforeach
+                </ul>
+            </div>
+        @endif
+
         @yield('content')
     </div>
 </body>

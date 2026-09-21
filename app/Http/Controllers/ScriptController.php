@@ -4,13 +4,17 @@ namespace App\Http\Controllers;
 
 use App\Models\Script;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 
 class ScriptController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $scripts = Script::withCount('recordings')->latest()->get();
+        $scripts = $request->user()->scripts()
+            ->withCount('recordings')
+            ->latest()
+            ->get();
 
         return view('scripts.index', compact('scripts'));
     }
@@ -22,13 +26,15 @@ class ScriptController extends Controller
             'body' => ['required', 'string'],
         ]);
 
-        $script = Script::create($data);
+        $script = $request->user()->scripts()->create($data);
 
         return redirect()->route('scripts.show', $script);
     }
 
     public function show(Script $script)
     {
+        Gate::authorize('view', $script);
+
         $script->load('recordings');
 
         return view('scripts.show', [
@@ -41,6 +47,8 @@ class ScriptController extends Controller
 
     public function update(Request $request, Script $script)
     {
+        Gate::authorize('update', $script);
+
         $data = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'body' => ['required', 'string'],
@@ -53,6 +61,8 @@ class ScriptController extends Controller
 
     public function destroy(Script $script)
     {
+        Gate::authorize('delete', $script);
+
         foreach ($script->recordings as $recording) {
             Storage::disk('public')->delete($recording->path);
         }

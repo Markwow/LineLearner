@@ -4,12 +4,15 @@ namespace App\Http\Controllers;
 
 use App\Models\Script;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 
 class RecordingController extends Controller
 {
     public function store(Request $request, Script $script, int $lineIndex)
     {
+        Gate::authorize('update', $script);
+
         $request->validate([
             'audio' => ['required', 'file', 'mimetypes:audio/webm,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,audio/mpeg,video/webm,video/mp4', 'max:51200'],
         ]);
@@ -36,6 +39,8 @@ class RecordingController extends Controller
 
     public function destroy(Script $script, int $lineIndex)
     {
+        Gate::authorize('update', $script);
+
         $recording = $script->recordings()->where('line_index', $lineIndex)->first();
 
         if ($recording) {
