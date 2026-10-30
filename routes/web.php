@@ -31,6 +31,8 @@ Route::middleware('auth')->group(function () {
         ->name('recordings.store');
     Route::delete('/scripts/{script}/lines/{lineIndex}/recording', [RecordingController::class, 'destroy'])
         ->name('recordings.destroy');
+    Route::patch('/scripts/{script}/lines/{lineIndex}/recording/delay', [RecordingController::class, 'updateDelay'])
+        ->name('recordings.delay');
 });
 
 Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {

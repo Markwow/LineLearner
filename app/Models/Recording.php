@@ -7,7 +7,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Recording extends Model
 {
-    protected $fillable = ['script_id', 'line_index', 'path'];
+    protected $fillable = ['script_id', 'line_index', 'path', 'delay_seconds'];
+
+    protected $casts = ['delay_seconds' => 'float'];
 
     public function script(): BelongsTo
     {

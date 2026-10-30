@@ -28,6 +28,15 @@
     .icon-btn.play.playing { background: var(--record); }
     .icon-btn.play:disabled { background: var(--panel-2); }
     .icon-btn.del { background: transparent; color: var(--muted); font-size: 18px; }
+    .line .delay-wrap {
+        display: inline-flex; align-items: center; gap: 3px; margin: 0;
+        font-size: 13px; color: var(--muted); cursor: text;
+    }
+    .line .delay {
+        width: 58px; height: 40px; margin: 0; padding: 0 6px;
+        font-size: 14px; text-align: center; color: var(--muted);
+    }
+    .line .delay.set { color: var(--accent); border-color: var(--accent); }
     @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.5); } }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex-shrink:0; }
     .status-dot.has { background: var(--good); }
@@ -38,6 +47,9 @@
         border-color: var(--accent);
         box-shadow: 0 0 0 1px var(--accent), 0 6px 22px rgba(108,140,255,.25);
     }
+    /* Cue line waiting on its countdown */
+    .line.up-next { border-color: var(--accent); border-style: dashed; }
+    .rehearsal-bar.counting .rb-label { color: var(--accent); font-weight: 700; }
 
     /* Sticky rehearsal control bar */
     .rehearsal-bar {
@@ -98,19 +110,36 @@
                 @endforeach
             </select>
         </div>
+        <div>
+            <label style="margin-bottom:2px">Lead-in (after ▶)</label>
+            <select id="leadInSelect">
+                <option value="0">None</option>
+                <option value="3" selected>3 sec</option>
+                <option value="5">5 sec</option>
+                <option value="10">10 sec</option>
+            </select>
+        </div>
     </div>
 
     <p class="hint" id="micHint">Hit the red button on a cue line to record it. Recordings save automatically.</p>
 
     <div id="lines"
          data-store-tpl="{{ route('recordings.store', ['script' => $script->id, 'lineIndex' => '__IDX__']) }}"
-         data-destroy-tpl="{{ route('recordings.destroy', ['script' => $script->id, 'lineIndex' => '__IDX__']) }}">
+         data-destroy-tpl="{{ route('recordings.destroy', ['script' => $script->id, 'lineIndex' => '__IDX__']) }}"
+         data-delay-tpl="{{ route('recordings.delay', ['script' => $script->id, 'lineIndex' => '__IDX__']) }}">
         @foreach($lines as $line)
             <div class="line" data-index="{{ $line['index'] }}" data-speaker="{{ $line['speaker'] }}">
                 <div class="speaker">{{ $line['speaker'] ?? '' }}</div>
                 <div class="text">{{ $line['text'] }}</div>
                 <div class="controls">
                     <span class="status-dot {{ isset($recordingUrls[$line['index']]) ? 'has' : '' }}"></span>
+                    @php $delay = $recordingDelays[$line['index']] ?? null; @endphp
+                    <label class="delay-wrap" title="Seconds to wait before this line plays (blank = none)"
+                           style="{{ isset($recordingUrls[$line['index']]) ? '' : 'display:none' }}">
+                        ⏱<input type="number" class="delay {{ $delay !== null ? 'set' : '' }}"
+                               min="0" max="300" step="0.1" inputmode="decimal" placeholder="auto"
+                               value="{{ $delay }}">s
+                    </label>
                     <button class="icon-btn rec" title="Record">●</button>
                     <button class="icon-btn play" title="Play" {{ isset($recordingUrls[$line['index']]) ? '' : 'disabled' }}>▶</button>
                     <button class="icon-btn del" title="Delete" style="{{ isset($recordingUrls[$line['index']]) ? '' : 'display:none' }}">×</button>
@@ -146,7 +175,7 @@
     <div class="rehearsal-bar" id="rehearsalBar">
         <div class="rb-inner">
             <div class="rb-nextup">
-                <span class="rb-label">Next&nbsp;up</span>
+                <span class="rb-label" id="rbLabel">Next&nbsp;up</span>
                 <span class="rb-next-text" id="rbNextText">—</span>
             </div>
             <div class="rb-controls">
@@ -163,11 +192,14 @@
         const linesEl = document.getElementById('lines');
         const storeTpl = linesEl.dataset.storeTpl;
         const destroyTpl = linesEl.dataset.destroyTpl;
+        const delayTpl = linesEl.dataset.delayTpl;
         const cueSelect = document.getElementById('cueSelect');
         const micHint = document.getElementById('micHint');
 
         // Existing recordings from the server.
         const urls = @json($recordingUrls);
+        // Per-line "wait before this line" overrides, in seconds.
+        const delays = @json((object) $recordingDelays);
 
         let mediaRecorder = null;
         let mediaStream = null;
@@ -316,6 +348,7 @@
             row.querySelector('.status-dot').classList.add('has');
             row.querySelector('.play').disabled = false;
             row.querySelector('.del').style.display = '';
+            row.querySelector('.delay-wrap').style.display = '';
             updateNextUp();
         }
 
@@ -359,10 +392,16 @@
                 headers: { 'X-CSRF-TOKEN': CSRF, 'Accept': 'application/json' },
             });
             delete urls[idx];
+            delete delays[idx];
             row.querySelector('.status-dot').classList.remove('has');
             row.querySelector('.play').disabled = true;
             row.querySelector('.del').style.display = 'none';
+            row.querySelector('.delay-wrap').style.display = 'none';
+            const delayInput = row.querySelector('.delay');
+            delayInput.value = '';
+            delayInput.classList.remove('set');
             if (row === currentCueRow) { currentCueRow = null; row.classList.remove('now-playing'); }
+            if (countdown && countdown.row === row) { cancelCountdown(); autoAdvance = false; setPlayIcon(false); }
             updateNextUp();
         }
 
@@ -382,6 +421,7 @@
                 if (currentPlayBtn === e.target) {
                     stopCurrentAudio();
                 } else {
+                    cancelCountdown();
                     playRow(row);
                     // Tapping a cue line directly moves the rehearsal cursor here,
                     // so "Next" continues from this point.
@@ -396,13 +436,79 @@
             }
         });
 
+        // Per-line delay: seconds to wait before the line fires; blank means none.
+        linesEl.addEventListener('change', async e => {
+            if (!e.target.classList.contains('delay')) return;
+            const input = e.target;
+            const idx = input.closest('.line').dataset.index;
+            const restore = () => { input.value = idx in delays ? delays[idx] : ''; };
+            let value = null;
+            if (input.value.trim() !== '') {
+                value = Math.round(parseFloat(input.value) * 10) / 10;
+                if (!isFinite(value) || value < 0 || value > 300) { restore(); return; }
+                input.value = value;
+            }
+            const res = await fetch(urlFor(delayTpl, idx), {
+                method: 'PATCH',
+                headers: { 'X-CSRF-TOKEN': CSRF, 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delay_seconds: value }),
+            });
+            if (!res.ok) {
+                restore();
+                alert('Could not save the delay for this line.');
+                return;
+            }
+            if (value === null) delete delays[idx]; else delays[idx] = value;
+            input.classList.toggle('set', value !== null);
+        });
+        // Enter saves (fires change) without the keyboard shortcuts below reacting.
+        linesEl.addEventListener('keydown', e => {
+            if (e.target.classList.contains('delay') && e.key === 'Enter') e.target.blur();
+        });
+
         // ---- Rehearsal engine: step through the cue queue hands-free ----
         const rbPlay = document.getElementById('rbPlay');
         const rbNext = document.getElementById('rbNext');
         const rbRestart = document.getElementById('rbRestart');
         const rbNextText = document.getElementById('rbNextText');
+        const rbLabel = document.getElementById('rbLabel');
+        const rehearsalBar = document.getElementById('rehearsalBar');
+        const leadInSelect = document.getElementById('leadInSelect');
         let currentCueRow = null;   // last cue line played
         let autoAdvance = false;    // true while auto-playing straight through the queue
+        let countdown = null;       // { row, timer } while waiting to fire the next cue
+
+        // Remember the lead-in preference per browser.
+        try { const v = localStorage.getItem('ll.leadIn'); if (v !== null) leadInSelect.value = v; } catch (e) {}
+        leadInSelect.addEventListener('change', () => { try { localStorage.setItem('ll.leadIn', leadInSelect.value); } catch (e) {} });
+        const leadInSeconds = () => parseInt(leadInSelect.value, 10) || 0;
+
+        function cancelCountdown() {
+            if (!countdown) return;
+            clearInterval(countdown.timer);
+            countdown.row.classList.remove('up-next');
+            countdown = null;
+            rbLabel.innerHTML = 'Next&nbsp;up';
+            rehearsalBar.classList.remove('counting');
+        }
+
+        // Count down `seconds`, then play `row`. Pause / Next / Restart cancel it.
+        function startCountdown(row, seconds, auto) {
+            cancelCountdown();
+            row.classList.add('up-next');
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            rehearsalBar.classList.add('counting');
+            setPlayIcon(true);
+            // Track a deadline rather than counting ticks so fractional waits (4.5s) are exact.
+            const fireAt = Date.now() + seconds * 1000;
+            const tick = () => {
+                const left = (fireAt - Date.now()) / 1000;
+                if (left <= 0) { cancelCountdown(); playCue(row, auto); return; }
+                rbLabel.textContent = 'In ' + Math.ceil(left) + '…';
+            };
+            countdown = { row, timer: setInterval(tick, 50) };
+            tick();
+        }
 
         // The queue is every cue line that actually has a recording, in order.
         function buildQueue() {
@@ -450,15 +556,18 @@
             setPlayIcon(!!audio);
             if (audio) {
                 audio.addEventListener('ended', () => {
-                    if (autoAdvance) advance(true);
+                    if (autoAdvance) advance(true, 0);
                     else setPlayIcon(false);
                 });
             }
             updateNextUp();
         }
 
-        // Advance to and play the next cue line. Returns false at the end of the queue.
-        function advance(auto) {
+        // Advance to and play the next cue line after a `delay`-second countdown.
+        // A line's own delay setting overrides `delay`; pass null to
+        // play immediately (Next button). Returns false at the end of the queue.
+        function advance(auto, delay = null) {
+            cancelCountdown();
             const row = nextCueRow();
             if (!row) {
                 currentCueRow = null;   // reset so the next press starts from the top
@@ -468,24 +577,32 @@
                 updateNextUp();
                 return false;
             }
-            playCue(row, auto);
+            const idx = row.dataset.index;
+            const wait = delay === null ? 0 : (idx in delays ? delays[idx] : delay);
+            if (wait > 0) startCountdown(row, wait, auto);
+            else playCue(row, auto);
             return true;
         }
 
         function togglePlayPause() {
-            if (currentAudio && !currentAudio.paused && !currentAudio.ended) {
+            if (countdown) {
+                cancelCountdown();             // counting down -> stop, stay on this line
+                autoAdvance = false;
+                setPlayIcon(false);
+            } else if (currentAudio && !currentAudio.paused && !currentAudio.ended) {
                 currentAudio.pause();          // playing -> pause
                 setPlayIcon(false);
             } else if (currentAudio && currentAudio.paused) {
                 currentAudio.play();           // paused -> resume
                 setPlayIcon(true);
             } else {
-                autoAdvance = true;            // idle -> start auto-playing the queue
-                advance(true);
+                autoAdvance = true;            // idle -> lead-in, then auto-play the queue
+                advance(true, leadInSeconds());
             }
         }
 
         function restartRehearsal() {
+            cancelCountdown();
             stopCurrentAudio();
             autoAdvance = false;
             currentCueRow = null;

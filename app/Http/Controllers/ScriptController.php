@@ -42,6 +42,7 @@ class ScriptController extends Controller
             'lines' => $script->lines(),
             'speakers' => $script->speakers(),
             'recordingUrls' => $script->recordingUrls(),
+            'recordingDelays' => $script->recordingDelays(),
         ]);
     }
 

@@ -84,4 +84,13 @@ class Script extends Model
             ->mapWithKeys(fn (Recording $r) => [$r->line_index => $r->url()])
             ->all();
     }
+
+    /** Per-line delay overrides, keyed by line index (only lines that have one). */
+    public function recordingDelays(): array
+    {
+        return $this->recordings
+            ->whereNotNull('delay_seconds')
+            ->mapWithKeys(fn (Recording $r) => [$r->line_index => $r->delay_seconds])
+            ->all();
+    }
 }
